@@ -1,9 +1,9 @@
 # ATLAS Threshold Analysis Report
-> Detection Rule Calibration via FRR / FAR / EER — Ch. 8.4–8.5
+> Detection Rule Calibration via FRR / FAR / EER — Data-Driven Cybersecurity (Mattei, Manning 2025)Ch. 8.4–8.5
 
 Author: Patrick Lefler </br>
 Published: 2026-07-16 </br>
-Rendered:
+Rendered: https://patrick-lefler.github.io/rQuarto_ATLAS_detection_rules_analysis_2026-07-16/
 
 ## Project Introduction
 > ATLAS-based FRR/FAR/EER threshold calibration for detection rules in R/Quarto, framing SOC alert tuning as a documented risk decision for cybersecurity leaders.
