@@ -1,5 +1,5 @@
 # ATLAS Threshold Analysis Report
-> Detection Rule Calibration via FRR / FAR / EER — Data-Driven Cybersecurity (Mattei, Manning 2025)Ch. 8.4–8.5
+> Detection Rule Calibration via FRR / FAR / EER — Data-Driven Cybersecurity (Mattei, Manning 2025) Ch. 8.4–8.5
 
 Author: Patrick Lefler </br>
 Published: 2026-07-16 </br>
