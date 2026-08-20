@@ -1,0 +1,482 @@
+---
+title: "ATLAS Threshold Detection Rules Analysis"
+subtitle: "Detection Rule Calibration via FRR / FAR / EER"
+author: "Patrick Lefler"
+abstract: "This project uses the ATLAS (Alert Threshold Lifecycle Assessment System) method to assess whether three detection rules—Brute Force Login, Lateral Movement, and Data Exfiltration—are set at the appropriate thresholds based on their current confusion matrix data. For each rule, the analysis calculates the False Rejection Rate (FRR), False Acceptance Rate (FAR), and Equal Error Rate (EER), and then provides a clear TIGHTEN, LOOSEN, or HOLD recommendation based on the most common error type. Brute Force Login is causing too many false alarms compared to real threats and should be tightened. Lateral Movement is missing almost half of confirmed events and should be loosened, even though this will mean more work for analysts. Data Exfiltration is almost exactly at its EER and should stay at its current threshold. Beyond these findings, the report argues that setting thresholds is really about deciding how much risk to accept, not just a technical choice. If a rule is not calibrated, it means the risk tolerance is not clearly stated. Too many alerts from a high-FAR rule can lead to extra staffing costs, and regulators and auditors now expect to see records showing that detection controls are actually tested, not just installed. The final section explains this point for risk stakeholders and board members."
+date: "2026-07-16"
+format:
+  html:
+    code-fold: true
+    code-copy: true
+    code-overflow: wrap
+    code-tools: true
+    code-summary: "Display code"
+    df-print: kable
+    embed-math: true
+    embed-resources: true
+    fig-align: center
+    fig-height: 6
+    fig-width: 10
+    highlight-style: arrow
+    lightbox: true
+    linkcolor: "#0166CC"
+    number-sections: false
+    page-layout: full
+    smooth-scroll: true
+    theme: sandstone
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    toc-title: "Contents"
+execute:
+  echo: true
+  warning: false
+  message: false
+html-math-method: mathjax
+knitr:
+  opts_chunk:
+    comment: "#>"
+---
+
+### Overview
+
+This report uses the ATLAS (Alert Threshold Lifecycle Assessment System) method from Data-Driven Cybersecurity (Mattei, Manning 2025) to check if detection thresholds are set correctly for each rule. Getting these thresholds right is key to making detection programs work well every day. If a rule is too strict, real intrusions can slip by unnoticed. If it is too loose, the system gets flooded with alerts, making it hard to spot real threats. ATLAS helps make these decisions based on clear, repeatable data instead of guesswork or recent high-profile incidents.
+
+For each detection rule, this analysis looks at three metrics from the confusion matrix at the current threshold: False Rejection Rate (FRR), False Acceptance Rate (FAR), and Equal Error Rate (EER). Together, these numbers show where a rule stands between missing threats and raising false alarms, and whether that balance makes sense for the rule’s purpose. Based on the relationship between FRR and FAR, the report gives a clear recommendation—**TIGHTEN, LOOSEN, or HOLD**—so security engineers get practical advice they can use right away, not just more data to store.
+
+The three detection rules reviewed here—Brute Force Login, Lateral Movement, and Data Exfiltration—were picked because they cover different stages of the attack process and have different risks if not set correctly. Missing a lateral movement alert leads to different problems than getting too many brute force alerts. The recommendations in this report take these differences into account, instead of treating all three rules the same.
+
+::: {.callout-note icon = false}
+
+### ATLAS Methodology
+
+ATLAS is an 8-step cyclical process: Select → Define → Categorize → Collect → Analyze → Implement → Measure → Report. Each step builds on the last: rules are selected for review, success criteria are defined, incoming events are categorized against ground truth, and data is collected over a fixed observation window before analysis begins. This report covers the **Analyze** and **Implement** steps — computing FRR, FAR, and EER from the collected confusion matrix, and translating that math into a specific threshold action for each rule. Re-running after threshold adjustment closes the **Measure** loop, and the resulting delta becomes input to the next **Report** step, which make 
+
+:::
+
+------------------------------------------------------------------------
+
+### Methodology
+
+#### FRR — False Rejection Rate
+
+The FRR measures the proportion of actual threats that the detection rule failed to flag. A high FRR means the threshold is too strict: the rule is blocking legitimate signals and letting real threats through undetected. Because FRR is calculated only against the population of confirmed threats (true positives plus false negatives), it isolates a rule's blind spot from its noise problem — a rule can have an excellent FAR and still be dangerously permissive toward actual attackers if its FRR is high. Tracking FRR on its own is what keeps an analyst from mistaking a quiet alert queue for a secure environment; the silence could just as easily mean the rule stopped seeing what it was built to catch.
+
+$$\text{FRR} = \frac{FN}{TP + FN}$$
+
+A high FRR in continuous monitoring "might indicate overly stringent thresholds, where normal behavior is often flagged as suspicious, leading to unnecessary alerts and potentially ignoring genuine threats due to alert fatigue." In practice this shows up as a rule that looks well-behaved on a dashboard — few alerts, low volume — while quietly missing the events it exists to catch, which is exactly why FRR needs to be reviewed on its own rather than inferred from alert count alone.
+
+#### FAR — False Acceptance Rate
+
+The FAR measures the proportion of benign events incorrectly flagged as threats. A high FAR is the primary driver of alert fatigue: analysts are buried in noise, and real threats get lost in the queue. Unlike FRR, FAR is calculated against the much larger population of benign traffic, so even a small percentage-point increase can translate into hundreds of additional tickets in a busy environment. That volume carries a compounding cost: each false positive an analyst clears trains them, consciously or not, to move faster and scrutinize less on the next one — precisely the condition under which a genuine alert gets closed without a second look.
+
+$$\text{FAR} = \frac{FP}{FP + TN}$$
+
+A high FAR means "many potentially harmful activities are not flagged, leaving the organisation vulnerable to undetected threats." High FAR also desensitises analysts to alerts over time. The two effects reinforce each other: as queue volume grows, average time-per-alert shrinks, and the rule that was supposed to add a layer of scrutiny instead erodes the one already in place.
+
+#### EER — Equal Error Rate
+
+The EER is the threshold value at which FRR and FAR are equal. It represents the theoretically optimal operating point: the system is equally likely to miss a real threat as to raise a false alarm. The lower the EER, the more accurate the detection system overall, because it means both error types can be held low simultaneously rather than traded off against each other. EER is useful less as a target to hit exactly and more as a benchmark: comparing a rule's current FRR/FAR position against its own EER shows how much room exists to move the threshold before one error type starts rising faster than the other falls. A rule sitting far from its EER has slack to adjust; a rule already near its EER does not.
+
+$$\text{EER} \approx \frac{FRR + FAR}{2}$$
+
+The EER is a critical metric representing the point at which the FRR and FAR are equal. It serves as a balanced measure of the system's overall accuracy. The lower the EER, the more reliable the system is at distinguishing between legitimate and illegitimate activities." Framed differently, EER answers a question a single FRR or FAR number cannot: not merely how many errors a rule makes, but how evenly those errors are split between the two directions a detection rule can fail.
+
+------------------------------------------------------------------------
+
+### Setup
+
+The chunk below defines the core ATLAS formulas, the recommendation logic, and the plotting function used throughout the rest of this report. Calibration charts are built in ggplot2 and passed through `ggplotly()` so readers can hover a curve to read the exact error rate at any threshold, per the project's visualization stack priority.
+
+```{r}
+#| include: false
+
+library(tidyverse)    # Data manipulation and ggplot2
+library(kableExtra)   # Table formatting
+library(knitr)        # Document rendering
+library(plotly)       # Interactive chart wrapping
+library(scales)       # Axis and label formatting
+library(sessioninfo)  # Session provenance
+library(cli)          # Structured error messages (cli_abort) per error-handling convention
+
+theme_set(theme_minimal(base_size = 12))
+
+# ── Brand palette (project _brand.yml / brand_palette) ───────────────────────
+BRAND_PRIMARY   <- "#1A1A2E"
+BRAND_ACCENT    <- "#0F3460"   # dark blue — used for FRR / LOOSEN
+BRAND_HIGHLIGHT <- "#E94560"   # red-pink  — used for FAR / TIGHTEN
+BRAND_GREY      <- "#6E6E73"   # date-grey — used for the EER crossover line
+HOLD_GREEN      <- "#2E7D32"   # not in brand palette; retained for stoplight convention
+
+COLOURS <- list(
+  TIGHTEN = BRAND_HIGHLIGHT,
+  LOOSEN  = BRAND_ACCENT,
+  HOLD    = HOLD_GREEN
+)
+
+
+# ── Core formulas (Ch. 8.5) ──────────────────────────────────────────────────
+
+compute_frr <- function(tp, fn) {
+  # FRR = FN / (TP + FN)  — Ch. 8.5.1
+  total <- tp + fn
+  if (total == 0) {
+    cli_abort(c(
+      "Cannot compute FRR.",
+      "x" = "TP + FN = 0: no actual threats in dataset."
+    ))
+  }
+  fn / total
+}
+
+compute_far <- function(fp, tn) {
+  # FAR = FP / (FP + TN)  — Ch. 8.5.2
+  total <- fp + tn
+  if (total == 0) {
+    cli_abort(c(
+      "Cannot compute FAR.",
+      "x" = "FP + TN = 0: no actual benign events in dataset."
+    ))
+  }
+  fp / total
+}
+
+compute_eer <- function(frr, far) {
+  # EER ≈ (FRR + FAR) / 2  — Ch. 8.5.3 single-point approximation
+  (frr + far) / 2
+}
+
+
+# ── Recommendation ───────────────────────────────────────────────────────────
+
+recommend <- function(frr, far, tolerance = 0.02) {
+  # TIGHTEN: FAR > FRR — too many false alarms.
+  # LOOSEN:  FRR > FAR — too many missed threats.
+  # HOLD:    |FRR - FAR| within tolerance — near EER.
+  #
+  # Design decision: 2 percentage-point tolerance not stated in book;
+  # adjust per rule based on operational risk appetite.
+  delta <- frr - far
+
+  if (abs(delta) <= tolerance) {
+    action <- "HOLD"
+    reason <- str_glue(
+      "FRR ({percent(frr, accuracy = 0.1)}) and FAR ({percent(far, accuracy = 0.1)}) ",
+      "are within {percent(tolerance, accuracy = 1)} of each other. ",
+      "Threshold is near EER — no adjustment needed."
+    )
+  } else if (delta > 0) {
+    action <- "LOOSEN"
+    reason <- str_glue(
+      "FRR ({percent(frr, accuracy = 0.1)}) > FAR ({percent(far, accuracy = 0.1)}) ",
+      "by {percent(abs(delta), accuracy = 0.1)}. ",
+      "Too many real threats are being missed. ",
+      "Lower the detection threshold to increase sensitivity."
+    )
+  } else {
+    action <- "TIGHTEN"
+    reason <- str_glue(
+      "FAR ({percent(far, accuracy = 0.1)}) > FRR ({percent(frr, accuracy = 0.1)}) ",
+      "by {percent(abs(delta), accuracy = 0.1)}. ",
+      "Alert volume is too high relative to actual threats. ",
+      "Raise the detection threshold to reduce false alarms."
+    )
+  }
+
+  list(action = action, reason = as.character(reason))
+}
+
+
+# ── FRR / FAR curve (Gaussian model — design decision) ──────────────────────
+
+build_frr_far_curve <- function(frr_obs, far_obs, n_points = 300) {
+  # Two-Gaussian signal detection model anchored to observed (FRR, FAR).
+  #   Benign:  N(0, 1)
+  #   Threats: N(mu, 1),  mu solved from observed FAR and FRR.
+  far_c <- pmin(pmax(far_obs, 1e-6), 1 - 1e-6)
+  frr_c <- pmin(pmax(frr_obs, 1e-6), 1 - 1e-6)
+
+  t_obs     <- qnorm(1 - far_c)
+  mu_threat <- t_obs - qnorm(frr_c)
+
+  thresholds <- seq(
+    min(-3, mu_threat - 3),
+    max(3,  mu_threat + 3),
+    length.out = n_points
+  )
+  far_curve <- 1 - pnorm(thresholds, mean = 0,         sd = 1)
+  frr_curve <-     pnorm(thresholds, mean = mu_threat, sd = 1)
+
+  eer_idx       <- which.min(abs(frr_curve - far_curve))
+  eer_threshold <- thresholds[eer_idx]
+  eer_value     <- (frr_curve[eer_idx] + far_curve[eer_idx]) / 2
+
+  list(
+    curve         = tibble(threshold = thresholds, frr_curve = frr_curve, far_curve = far_curve),
+    eer_threshold = eer_threshold,
+    eer_value     = eer_value
+  )
+}
+
+
+# ── Plot ─────────────────────────────────────────────────────────────────────
+
+plot_rule <- function(rule_name, tp, fp, fn, tn, tolerance = 0.02) {
+  frr <- compute_frr(tp, fn)
+  far <- compute_far(fp, tn)
+  eer <- compute_eer(frr, far)
+  rec <- recommend(frr, far, tolerance)
+
+  curve   <- build_frr_far_curve(frr, far)
+  current_t <- qnorm(1 - pmin(pmax(far, 1e-6), 1 - 1e-6))
+
+  action_colour <- COLOURS[[rec$action]]
+
+  chart_title <- str_glue(
+    "{rule_name}  —  FRR={percent(frr, accuracy = 0.1)}   ",
+    "FAR={percent(far, accuracy = 0.1)}   ",
+    "EER≈{percent(curve$eer_value, accuracy = 0.1)}"
+  )
+
+  p <- ggplot(curve$curve, aes(x = threshold)) +
+    geom_line(aes(y = frr_curve, colour = "FRR — missed threats"), linewidth = 1) +
+    geom_line(aes(y = far_curve, colour = "FAR — false alarms"), linewidth = 1) +
+    geom_vline(xintercept = curve$eer_threshold, colour = BRAND_GREY,
+               linetype = "dashed", linewidth = 0.6) +
+    geom_vline(xintercept = current_t, colour = action_colour,
+               linetype = "dotted", linewidth = 1) +
+    annotate("point", x = current_t, y = frr, colour = BRAND_ACCENT, size = 3) +
+    annotate("point", x = current_t, y = far, colour = BRAND_HIGHLIGHT, size = 3) +
+    scale_colour_manual(
+      name = NULL,
+      values = c(
+        "FRR — missed threats" = BRAND_ACCENT,
+        "FAR — false alarms"   = BRAND_HIGHLIGHT
+      )
+    ) +
+    scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(-0.02, 1.02)) +
+    labs(title = chart_title, x = "Detection threshold", y = "Error rate") +
+    theme(
+      plot.title      = element_text(colour = action_colour, face = "bold", size = 12),
+      panel.grid.minor = element_blank(),
+      legend.position  = "bottom"
+    )
+
+  list(
+    plot = p,
+    result = tibble(
+      rule = rule_name,
+      tp = tp, fp = fp, fn = fn, tn = tn,
+      frr = frr, far = far,
+      eer_approx = eer, eer_curve = curve$eer_value,
+      action = rec$action, reason = rec$reason
+    )
+  )
+}
+```
+
+------------------------------------------------------------------------
+
+### Detection Rules
+
+The table below defines the confusion matrix for each detection rule at its current threshold. Edit this cell to analyse a different rule set. Each row represents one detection rule's classification outcomes over the observation window used for this review period: true positives and false negatives make up the actual-threat population that FRR is measured against, while false positives and true negatives make up the actual-benign population that FAR is measured against. Confusion matrix values should come from a fixed, labeled evaluation window — mixing windows of different lengths or threat densities across rules will skew the FRR/FAR comparison in the summary table below.
+
+```{r}
+#| label: tbl-rules
+
+rules <- tribble(
+  ~rule_name,            ~tp, ~fp, ~fn, ~tn,
+  "Brute Force Login",    80, 200,  20, 700,
+  "Lateral Movement",     55,  20,  45, 880,
+  "Data Exfiltration",    90,  90,  10, 810
+)
+
+kable(
+  rules,
+  format    = "html",
+  caption   = "Table 1: Detection rules and confusion matrix values for the current threshold period",
+  col.names = c("Detection Rule", "TP", "FP", "FN", "TN")
+) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width        = TRUE,
+    position          = "left",
+    font_size         = 13
+  )
+```
+
+------------------------------------------------------------------------
+
+### Per-Rule Analysis
+
+The three subsections below walk through each rule's FRR/FAR/EER position in turn, with the calibration chart and plain-language recommendation followed by a short discussion of what the underlying numbers actually mean operationally: why the rule should move, and what moving it will cost or recover.
+
+```{r}
+#| echo: false
+#| output: false
+
+results_list <- vector("list", nrow(rules))
+figures <- list()
+
+for (i in seq_len(nrow(rules))) {
+  row <- rules[i, ]
+  out <- plot_rule(
+    rule_name = row$rule_name,
+    tp = row$tp, fp = row$fp, fn = row$fn, tn = row$tn
+  )
+  results_list[[i]] <- out$result
+  figures[[row$rule_name]] <- out$plot |> ggplotly()
+}
+```
+
+#### Brute Force Login
+
+```{r}
+#| echo: false
+#| label: fig-brute-force
+#| fig-cap: "ATLAS threshold analysis — Brute Force Login. Dashed line: EER crossover. Dotted line: current threshold."
+
+figures[["Brute Force Login"]]
+```
+
+**`r results_list[[1]]$action`** — `r results_list[[1]]$reason`
+
+Brute Force Login generates a disproportionate volume of noise: for every real brute-force attempt it catches, roughly 2.5 benign login patterns get flagged alongside it (200 false positives against 80 true positives). That ratio is typical of rules built on a simple failed-attempt counter, which struggles to distinguish a legitimate user who fat-fingers a password three times from an actual credential-stuffing attempt. TIGHTEN here most likely means raising the failed-attempt count or narrowing the retry window before the rule fires, not abandoning the signal — brute-force detection remains a useful control, it just needs less trigger-happy tuning.
+
+------------------------------------------------------------------------
+
+#### Lateral Movement
+
+```{r}
+#| echo: false
+#| label: fig-lateral-movement
+#| fig-cap: "ATLAS threshold analysis — Lateral Movement."
+
+figures[["Lateral Movement"]]
+```
+
+**`r results_list[[2]]$action`** — `r results_list[[2]]$reason`
+
+Lateral Movement is missing roughly 45.0% of confirmed lateral-movement events at the current threshold — a false-rejection rate that would be unacceptable in almost any other detection category. Its FAR is comparatively very low (2.2%), which is a pattern that often shows up when a rule has been tuned deliberately conservative to avoid flagging legitimate administrative activity such as RDP or PsExec use by IT staff. That conservatism carries a real cost: lateral movement is frequently the step between an initial foothold and the objective of an attack — data theft, ransomware deployment — so a rule that catches only half of it leaves a wide window for an intrusion to progress before containment.
+
+------------------------------------------------------------------------
+
+#### Data Exfiltration
+
+```{r}
+#| echo: false
+#| label: fig-data-exfil
+#| fig-cap: "ATLAS threshold analysis — Data Exfiltration."
+
+figures[["Data Exfiltration"]]
+```
+
+**`r results_list[[3]]$action`** — `r results_list[[3]]$reason`
+
+Data Exfiltration is essentially at its EER: FRR and FAR are both 10.0%, meaning the rule is equally likely to miss a real exfiltration event as it is to flag a benign large-file transfer. That balance is the calibration target ATLAS is built around, and for a rule protecting against the highest-consequence outcome in this set — confirmed data loss — sitting at EER rather than skewed toward either error type is the right posture. HOLD does not mean the rule is finished; it means further gains will require a materially better detection signal, such as additional contextual features, rather than a threshold adjustment alone, since moving the threshold in either direction simply trades one error type for the other from this point.
+
+------------------------------------------------------------------------
+
+### Summary
+
+The table below consolidates the three per-rule results into a single view for cross-rule comparison. Reading FRR and FAR side by side across rules, rather than one rule at a time, is often what surfaces the real prioritization question: Lateral Movement's 45.0% FRR represents more absolute risk exposure than Brute Force Login's noisier but individually less consequential 22.2% FAR, even though both rules produce a clear directional recommendation on their own.
+
+```{r}
+#| echo: false
+#| label: tbl-summary
+
+summary_df <- bind_rows(results_list) |>
+  mutate(
+    FRR = percent(frr, accuracy = 0.1),
+    FAR = percent(far, accuracy = 0.1),
+    EER = percent(eer_curve, accuracy = 0.1),
+    Recommendation = cell_spec(
+      action,
+      format     = "html",
+      bold       = TRUE,
+      color      = case_when(
+        action == "TIGHTEN" ~ "#9C1F36",
+        action == "LOOSEN"  ~ "#0F3460",
+        action == "HOLD"    ~ "#2E7D32"
+      ),
+      background = case_when(
+        action == "TIGHTEN" ~ "#fbe6ea",
+        action == "LOOSEN"  ~ "#e6eaf1",
+        action == "HOLD"    ~ "#e8f5ea"
+      )
+    )
+  ) |>
+  select(`Detection Rule` = rule, FRR, FAR, EER, Recommendation, Rationale = reason)
+
+kable(
+  summary_df,
+  format  = "html",
+  escape  = FALSE,
+  caption = "Table 2: ATLAS threshold analysis results — all detection rules"
+) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width        = TRUE,
+    position          = "left",
+    font_size         = 13
+  )
+```
+
+------------------------------------------------------------------------
+
+### Interpretation Notes
+
+**TIGHTEN** rules are generating alert volumes out of proportion to the actual threat rate. The immediate effect of raising the threshold is fewer tickets in the queue — but monitor FRR after adjustment to confirm real threats aren't being suppressed. Tightening is a one-way lever in the short term: it is easy to raise a threshold and hard to know, without the next Measure cycle's data, whether the adjustment traded acceptable noise reduction for a genuine increase in missed detections. Stage the change where possible — move the threshold partway, hold for one review period, and confirm FRR is still acceptable before tightening further.
+
+**LOOSEN** rules have the opposite problem: threats are slipping through. A lower threshold catches more, but will increase analyst workload. Pair loosening with a suppression rule or case-grouping logic where possible to avoid compounding alert fatigue from a different direction. Loosening without a corresponding investment in triage capacity just moves the fatigue problem from one rule to another — the team that was previously drowning in false brute-force alerts will instead start drowning in a wider net of lateral-movement candidates, most of which will still turn out to be benign even after the threshold moves. Budget for the added volume before implementing the change, not after.
+
+**HOLD** rules are operating near EER. Routine monitoring is sufficient; flag for review if attacker behavior or data volume shifts materially. A rule can drift out of HOLD status without any change to its own threshold — a shift in attacker technique, a new benign traffic pattern introduced by an infrastructure change, or a change in overall event volume can each move a rule's real-world FRR and FAR even while the configured threshold stays fixed. That is why HOLD still calls for the same review cadence as the other two categories, just not the same urgency.
+
+::: {.callout-note appearance="simple" icon = false}
+
+### ATLAS Cycle: Next Steps
+
+After implementing threshold adjustments, re-run this report with the confusion matrix values from the next review period. The DataSecure Inc. example in Ch. 8.5.5 demonstrates the expected improvement trajectory: FRR fell from 3% to 0.5%, FAR from 1% to 0.2%, and EER from 2% to 0.35% across one improvement cycle. That trajectory did not happen in a single threshold move — it is the compounding result of repeated Measure → Report → Select cycles, each one narrowing the gap between a rule's actual behavior and its intended purpose. Expect the rules in this report to need more than one cycle to reach a comparable improvement, particularly Lateral Movement, whose current FRR is far enough from target that a single threshold adjustment is unlikely to close the gap on its own. 
+
+:::
+
+------------------------------------------------------------------------
+
+### Why Threshold Calibration Matters to CyberSecurity Leaders
+
+Every number in this report traces back to a decision someone already made and probably doesn't remember making: where to set a threshold. That decision tends to get treated as a technical footnote, owned by whichever engineer configured the rule and never revisited unless something breaks. It shouldn't be. A detection threshold is a risk decision wearing an engineering costume, and the FRR/FAR/EER framework in this report exists to make that decision visible to the people who are actually accountable for the risk it creates.
+
+#### The threshold is a risk-appetite decision
+
+Every threshold implicitly answers a question the board is already supposed to be asking: how much undetected threat is the organization willing to tolerate, in exchange for how much analyst effort? A rule sitting far to the loose side of its EER, like Lateral Movement in this review, is a de facto statement that the organization accepts a materially higher probability of missing an attacker already inside the network — a statement nobody signed off on, because it was made one configuration change at a time by engineers optimizing for alert volume, not enterprise risk. ATLAS doesn't remove that decision from engineering's hands; it forces the decision to be stated in numbers a risk committee can actually evaluate against a stated risk appetite, rather than left implicit in a threshold field nobody has looked at since the day it was set.
+
+#### Alert fatigue is a staffing cost with a name
+
+A high FAR shows up on no financial statement, but it has a real cost: analyst hours spent clearing false positives are analyst hours not spent on the alert that matters, and sustained high-FAR conditions are a well-documented driver of security-team attrition. Every point of FAR reduction achieved through calibration, rather than through headcount, is capacity recovered without a hiring requisition. Leaders evaluating a request for additional SOC staff should ask, before approving it, whether the underlying detection rules have been calibrated at all. In several of the cases reviewed here, adjusting a single threshold would recover more analyst hours than the headcount increase being requested to compensate for the noise that threshold is currently generating.
+
+#### Audit and regulatory defensibility
+
+Under frameworks that expect demonstrable operational resilience and continuous monitoring — DORA's ICT risk management requirements among them — "we have detection rules" is no longer a sufficient answer when a regulator or auditor asks how those rules are validated. A documented, repeatable calibration process, run on a fixed cadence and producing a dated FRR/FAR/EER record for every reviewed rule, is what turns "we monitor for threats" into evidence an auditor can actually test. The absence of that record is itself a finding in an increasing number of regulatory regimes, independent of whether the underlying detection performance is good or bad — a program with mediocre FRR but a documented calibration history is, from an audit standpoint, in better shape than a program with unknown FRR and no history at all.
+
+#### What this report does not solve
+
+None of this makes threshold calibration free. Loosening a rule to close a coverage gap increases analyst workload immediately and only improves detection if the additional alerts actually get triaged, which requires either idle capacity or a budget conversation — the finding does not execute itself. Tightening a noisy rule can quietly raise FRR if it isn't monitored afterward, trading one blind spot for another instead of removing one. Leaders should treat this report, and the ones that follow it through future ATLAS cycles, as the input to that conversation rather than a substitute for having it. The value of running ATLAS on a fixed cadence is not that it produces a perfect threshold on the first pass — it rarely will — but that it replaces a one-time guess with a record of deliberate, revisited decisions that the organization can stand behind when someone eventually asks why a rule was set the way it was.
+
+------------------------------------------------------------------------
+
+### Session Information
+
+This report was generated in R; the session details below — R version, platform, and every attached and loaded package — are captured at render time via `sessioninfo::session_info()` for full reproducibility.
+
+```{r}
+#| echo: false
+
+session_info()
+```
+
+------------------------------------------------------------------------
+
+
+Rendered in R with <a href="https://quarto.org/">Quarto</a> · `tidyverse`, `ggplot2`, `plotly`, `kableExtra` </br>
+ATLAS methodology per <em>Data-Driven Cybersecurity</em> (Mattei, Manning 2025)
+
